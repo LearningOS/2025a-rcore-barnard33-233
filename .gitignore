@@ -18,4 +18,5 @@ pushall.sh
 *.bak
 ci-user/
 user/
+user
 os/vendor/

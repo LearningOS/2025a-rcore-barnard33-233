@@ -14,12 +14,16 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM,
+    // APP_BASE_ADDRESS,
+    // APP_SIZE_LIMIT
+};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
+use crate::syscall;
+pub use task::{TaskControlBlock, TaskStatus, SyscallCounter};
 
 pub use context::TaskContext;
 
@@ -52,6 +56,7 @@ lazy_static! {
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
         let mut tasks = [TaskControlBlock {
+            syscall_cnt: SyscallCounter::default(),
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
         }; MAX_APP_NUM];
@@ -168,4 +173,48 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+// XXX: in this chapter, apps and kernel are in the same address space
+// so we can access @addr directly
+
+/// read a byte from @addr of current running task
+pub fn task_trace_read(addr: usize) -> u8 {
+    unsafe {*(addr as *const u8)}
+}
+
+/// write a byte to @addr of current running task
+pub fn task_trace_write(addr: usize, data: u8) -> u8 {
+    unsafe {*(addr as *mut u8) = data;}
+    0
+}
+
+/// get the number of times the current task calls the system call with number @id
+pub fn task_trace_syscnt_get(id: usize) -> usize {
+    let inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    let sys_cnt = inner.tasks[current].syscall_cnt;
+    match id {
+        syscall::SYSCALL_WRITE => sys_cnt.syscall_write as usize,
+        syscall::SYSCALL_EXIT => sys_cnt.syscall_exit as usize,
+        syscall::SYSCALL_YIELD => sys_cnt.syscall_yield as usize,
+        syscall::SYSCALL_GET_TIME => sys_cnt.syscall_get_time as usize,
+        syscall::SYSCALL_TRACE => sys_cnt.syscall_trace as usize,
+        _ => 0
+    }
+}
+
+/// Add the number of times the current task calls the system call with number @id
+pub fn task_trace_syscnt_add(id: usize) {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    let sys_cnt = &mut inner.tasks[current].syscall_cnt;
+    match id {
+        syscall::SYSCALL_WRITE => sys_cnt.syscall_write += 1,
+        syscall::SYSCALL_EXIT => sys_cnt.syscall_exit += 1,
+        syscall::SYSCALL_YIELD => sys_cnt.syscall_yield += 1,
+        syscall::SYSCALL_GET_TIME => sys_cnt.syscall_get_time += 1,
+        syscall::SYSCALL_TRACE => sys_cnt.syscall_trace += 1,
+        _ => {}
+    };
 }
